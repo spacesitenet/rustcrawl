@@ -118,6 +118,7 @@ impl RunRequest<'_> {
                     concurrency: cli.concurrency,
                     scope,
                     delay: humantime::format_duration(cli.delay).to_string(),
+                    respect_crawl_delay: !cli.ignore_robots && !cli.ignore_crawl_delay,
                     output: cli.output.as_ref().map(|p| p.display().to_string()),
                     save: !cli.no_save,
                 })
@@ -178,6 +179,7 @@ impl PreparedRun {
             .concurrency(spec.concurrency)
             .scope(scope)
             .per_host_delay(delay)
+            .respect_crawl_delay(spec.respect_crawl_delay)
             .build()?;
         let sink = match &spec.output {
             Some(path) => Arc::new(
@@ -237,7 +239,6 @@ async fn run_interactive_job(
         }
     };
     prepared.save_if_needed(job_store, &summary)?;
-    report(&summary);
 
     Ok(display.wait_for_action(summary, job_store.load()).await)
 }
@@ -286,7 +287,9 @@ fn init_tracing(verbose: u8) {
         2 => "debug",
         _ => "trace",
     };
-    let default = format!("warn,rustcrawl_core={level},rustcrawl_cli={level}");
+    // Keep dependency crates quiet in the dashboard by default; users can still
+    // override this via RUST_LOG when they want full parser/network verbosity.
+    let default = format!("error,rustcrawl_core={level},rustcrawl_cli={level}");
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
 
     tracing_subscriber::fmt()

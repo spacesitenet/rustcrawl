@@ -55,6 +55,10 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub ignore_robots: bool,
 
+    /// Obey robots.txt allow/deny rules but ignore its Crawl-delay value.
+    #[arg(long = "ignore-crawl-delay")]
+    pub ignore_crawl_delay: bool,
+
     /// Only crawl URLs matching this regex (may be repeated).
     #[arg(long = "include", value_name = "REGEX")]
     pub include: Vec<String>,
@@ -67,7 +71,7 @@ pub(crate) struct Cli {
     #[arg(short = 'o', long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    /// Retry attempts for transient transport failures.
+    /// Retry attempts for transient network failures and temporary HTTP statuses.
     #[arg(long, default_value_t = 2)]
     pub retries: u32,
 
@@ -140,6 +144,7 @@ impl Cli {
             .request_timeout(self.timeout)
             .scope(self.scope.into())
             .respect_robots(!self.ignore_robots)
+            .respect_crawl_delay(!self.ignore_robots && !self.ignore_crawl_delay)
             .max_retries(self.retries)
             .max_body_bytes(self.max_body);
 

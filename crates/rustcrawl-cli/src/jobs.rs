@@ -24,6 +24,10 @@ fn default_concurrency() -> usize {
     DEFAULT_CONCURRENCY
 }
 
+fn default_respect_crawl_delay() -> bool {
+    true
+}
+
 /// A completed crawl run recorded by the local CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct JobRecord {
@@ -48,6 +52,9 @@ pub(crate) struct JobRecord {
     /// Per host delay used for this run.
     #[serde(default)]
     pub delay: Option<String>,
+    /// Whether robots.txt Crawl-delay could raise the configured per host delay.
+    #[serde(default = "default_respect_crawl_delay")]
+    pub respect_crawl_delay: bool,
     /// Output file path, if any.
     pub output: Option<String>,
     /// Pages fetched successfully.
@@ -103,6 +110,7 @@ pub(crate) struct JobTemplate {
     concurrency: usize,
     scope: Option<String>,
     delay: Option<String>,
+    respect_crawl_delay: bool,
     output: Option<String>,
 }
 
@@ -117,6 +125,7 @@ impl JobTemplate {
             concurrency: cli.concurrency,
             scope: Some(format!("{:?}", cli.scope).to_ascii_lowercase()),
             delay: Some(humantime::format_duration(cli.delay).to_string()),
+            respect_crawl_delay: !cli.ignore_robots && !cli.ignore_crawl_delay,
             output: cli.output.as_ref().map(|p| p.display().to_string()),
         }
     }
@@ -131,6 +140,7 @@ impl JobTemplate {
             concurrency: spec.concurrency,
             scope: Some(spec.scope.clone()),
             delay: Some(spec.delay.clone()),
+            respect_crawl_delay: spec.respect_crawl_delay,
             output: spec.output.clone(),
         }
     }
@@ -148,6 +158,7 @@ impl JobTemplate {
             concurrency: self.concurrency,
             scope: self.scope,
             delay: self.delay,
+            respect_crawl_delay: self.respect_crawl_delay,
             output: self.output,
             pages_fetched: summary.pages_fetched,
             pages_failed: summary.pages_failed,

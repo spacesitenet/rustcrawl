@@ -33,7 +33,9 @@ use crate::jobs::{JobHistory, JobRecord};
 
 const MAX_LOG_LINES: usize = 300;
 const MAX_SAMPLES: usize = 120;
-const SAVE_JOB_FIELD_INDEX: usize = 7;
+const ROBOTS_DELAY_FIELD_INDEX: usize = 6;
+const OUTPUT_FIELD_INDEX: usize = 7;
+const SAVE_JOB_FIELD_INDEX: usize = 8;
 
 struct RunInit {
     jobs: JobHistory,
@@ -209,6 +211,7 @@ pub(crate) struct NewJobSpec {
     pub concurrency: usize,
     pub scope: String,
     pub delay: String,
+    pub respect_crawl_delay: bool,
     pub output: Option<String>,
     pub save: bool,
 }
@@ -217,6 +220,7 @@ pub(crate) struct NewJobSpec {
 enum ViewMode {
     Dashboard,
     NewJob,
+    Commands,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +272,11 @@ impl NewJobForm {
                     value: "250ms".to_string(),
                 },
                 FormField {
+                    label: "Robots delay",
+                    help: "honor Crawl-delay: y | n",
+                    value: "y".to_string(),
+                },
+                FormField {
                     label: "Output",
                     help: "blank = do not write JSONL from dashboard-created job",
                     value: String::new(),
@@ -291,8 +300,10 @@ impl NewJobForm {
         form.fields[3].value = spec.concurrency.to_string();
         form.fields[4].value = spec.scope;
         form.fields[5].value = spec.delay;
-        form.fields[6].value = spec.output.unwrap_or_default();
-        form.fields[7].value = if spec.save { "y" } else { "n" }.to_string();
+        form.fields[ROBOTS_DELAY_FIELD_INDEX].value =
+            if spec.respect_crawl_delay { "y" } else { "n" }.to_string();
+        form.fields[OUTPUT_FIELD_INDEX].value = spec.output.unwrap_or_default();
+        form.fields[SAVE_JOB_FIELD_INDEX].value = if spec.save { "y" } else { "n" }.to_string();
         form
     }
 
@@ -337,18 +348,14 @@ impl NewJobForm {
         if delay.is_empty() {
             return Err("delay is required (try 250ms)".into());
         }
-        let output = if get(6).is_empty() {
+        let respect_crawl_delay =
+            parse_yes_no(get(ROBOTS_DELAY_FIELD_INDEX), true, "robots delay")?;
+        let output = if get(OUTPUT_FIELD_INDEX).is_empty() {
             None
         } else {
-            Some(get(6).to_string())
+            Some(get(OUTPUT_FIELD_INDEX).to_string())
         };
-        let save_raw = get(7).to_ascii_lowercase();
-        let save = match save_raw.as_str() {
-            "" => true,
-            "yes" | "y" | "true" | "1" => true,
-            "no" | "n" | "false" | "0" => false,
-            _ => return Err("save job must be y/n (default y)".into()),
-        };
+        let save = parse_yes_no(get(SAVE_JOB_FIELD_INDEX), true, "save job")?;
 
         Ok(NewJobSpec {
             target,
@@ -357,6 +364,7 @@ impl NewJobForm {
             concurrency,
             scope,
             delay,
+            respect_crawl_delay,
             output,
             save,
         })
@@ -372,6 +380,7 @@ impl NewJobSpec {
             concurrency: job.concurrency,
             scope: job.scope.clone().unwrap_or_else(|| "domain".to_string()),
             delay: job.delay.clone().unwrap_or_else(|| "250ms".to_string()),
+            respect_crawl_delay: job.respect_crawl_delay,
             output: job.output.clone(),
             save: true,
         }
@@ -390,6 +399,35 @@ where
             .map(Some)
             .map_err(|_| format!("{label} must be a number or blank"))
     }
+}
+
+fn parse_yes_no(value: &str, default: bool, label: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(default),
+        "yes" | "y" | "true" | "1" => Ok(true),
+        "no" | "n" | "false" | "0" => Ok(false),
+        _ => Err(format!("{label} must be y/n")),
+    }
+}
+
+fn command_line(key: &'static str, description: &'static str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{key:<18}"), Style::default().fg(Color::Yellow)),
+        Span::raw(description),
+    ])
+}
+
+fn setting_line(label: &'static str, value: impl Into<String>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<18}"), Style::default().fg(Color::DarkGray)),
+        Span::raw(value.into()),
+    ])
+}
+
+fn optional_display<T: std::fmt::Display>(value: Option<T>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unlimited".to_string())
 }
 
 /// A terminal in alternate-screen/raw mode. Dropping restores the user's shell.
@@ -525,7 +563,8 @@ impl Dashboard {
             bytes: summary.bytes_downloaded,
             elapsed_secs: summary.duration.as_secs_f64(),
         };
-        self.last_key_hint = Some("finished: r rerun, e edit settings, q/Esc exit".to_string());
+        self.last_key_hint =
+            Some("finished: r rerun, e edit settings, h commands, q/Esc exit".to_string());
         self.summary = Some(summary);
         self.jobs = jobs;
         self.clamp_selected_job();
@@ -533,6 +572,12 @@ impl Dashboard {
 
     fn selected_job(&self) -> Option<&JobRecord> {
         self.jobs.recent.iter().rev().nth(self.selected_job)
+    }
+
+    fn current_settings_spec(&self) -> Option<NewJobSpec> {
+        self.last_run_spec
+            .clone()
+            .or_else(|| self.selected_job().map(NewJobSpec::from_job))
     }
 
     fn select_next_job(&mut self) {
@@ -568,20 +613,22 @@ impl Dashboard {
         self.render_header(frame, root[0]);
         self.render_stats(frame, root[1]);
 
-        if self.mode == ViewMode::NewJob {
-            self.render_new_job(frame, root[2]);
-        } else {
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-                .split(root[2]);
-            let left = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(body[0]);
-            self.render_chart(frame, left[0]);
-            self.render_job_stats(frame, left[1]);
-            self.render_logs(frame, body[1]);
+        match self.mode {
+            ViewMode::NewJob => self.render_new_job(frame, root[2]),
+            ViewMode::Commands => self.render_commands(frame, root[2]),
+            ViewMode::Dashboard => {
+                let body = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+                    .split(root[2]);
+                let left = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(body[0]);
+                self.render_chart(frame, left[0]);
+                self.render_job_stats(frame, left[1]);
+                self.render_logs(frame, body[1]);
+            }
         }
 
         self.render_footer(frame, root[3]);
@@ -757,6 +804,11 @@ impl Dashboard {
     }
 
     fn render_job_stats(&self, frame: &mut Frame<'_>, area: Rect) {
+        if !matches!(self.status, Status::Idle) {
+            self.render_current_job_progress(frame, area);
+            return;
+        }
+
         let stats = &self.jobs.stats;
         let rows = vec![
             Line::from(vec![
@@ -798,8 +850,98 @@ impl Dashboard {
         );
     }
 
+    fn render_current_job_progress(&self, frame: &mut Frame<'_>, area: Rect) {
+        let s = self.last_snapshot;
+        let completed = s.fetched + s.failed;
+        let queued = s.discovered.saturating_sub(completed + s.in_flight);
+        let success = if completed > 0 {
+            s.fetched as f64 / completed as f64
+        } else {
+            1.0
+        };
+        let max_pages = self.last_run_spec.as_ref().and_then(|spec| spec.max_pages);
+        let delay_label = self
+            .last_run_spec
+            .as_ref()
+            .map(|spec| {
+                if spec.respect_crawl_delay {
+                    format!("{} + robots", spec.delay)
+                } else {
+                    spec.delay.clone()
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let progress_line = match max_pages {
+            Some(max_pages) if max_pages > 0 => {
+                let pct = ((completed as f64 / max_pages as f64) * 100.0).min(100.0);
+                Line::from(vec![
+                    Span::styled("Progress  ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format!("{completed}/{max_pages} ({pct:.1}%)")),
+                ])
+            }
+            _ => Line::from(vec![
+                Span::styled("Progress  ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{completed} done")),
+            ]),
+        };
+
+        let remaining_line = match max_pages {
+            Some(max_pages) => {
+                let remaining = (max_pages as u64).saturating_sub(completed);
+                Line::from(vec![
+                    Span::styled("Left      ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format!("{remaining} budget, {queued} queued")),
+                ])
+            }
+            None => Line::from(vec![
+                Span::styled("Queued    ", Style::default().fg(Color::DarkGray)),
+                Span::raw(queued.to_string()),
+            ]),
+        };
+
+        let rows = vec![
+            progress_line,
+            Line::from(vec![
+                Span::styled("Done      ", Style::default().fg(Color::DarkGray)),
+                Span::styled(s.fetched.to_string(), Style::default().fg(Color::Green)),
+                Span::raw(" ok, "),
+                Span::styled(s.failed.to_string(), Style::default().fg(Color::Red)),
+                Span::raw(" err"),
+            ]),
+            remaining_line,
+            Line::from(vec![
+                Span::styled("Active    ", Style::default().fg(Color::DarkGray)),
+                Span::raw(s.in_flight.to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled("Success   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.1}%", success * 100.0),
+                    Style::default().fg(success_color(success)),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Retries   ", Style::default().fg(Color::DarkGray)),
+                Span::raw("backoff may hold active reqs"),
+            ]),
+            Line::from(vec![
+                Span::styled("Delay     ", Style::default().fg(Color::DarkGray)),
+                Span::raw(delay_label),
+            ]),
+        ];
+
+        frame.render_widget(
+            Paragraph::new(rows)
+                .block(Block::default().title("Current Job").borders(Borders::ALL))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+    }
+
     fn render_recent_jobs(&self, frame: &mut Frame<'_>, area: Rect) {
         let visible = area.height.saturating_sub(2) as usize;
+        let inner_width = area.width.saturating_sub(2) as usize;
         let mut items = self
             .jobs
             .recent
@@ -810,6 +952,20 @@ impl Dashboard {
             .map(|(idx, job)| {
                 let selected = idx == self.selected_job;
                 let timestamp = job.finished_at.format("%H:%M:%S").to_string();
+                let pages = format!("{}p", job.pages_fetched);
+                let duration = format!("{:.1}s", job.duration_secs);
+                let prefix_width = 1
+                    + 1
+                    + timestamp.chars().count()
+                    + 1
+                    + pages.chars().count()
+                    + 1
+                    + duration.chars().count()
+                    + 1;
+                let target = truncate(
+                    &job.target_label(),
+                    inner_width.saturating_sub(prefix_width),
+                );
                 let line = Line::from(vec![
                     Span::styled(
                         if selected { ">" } else { " " },
@@ -818,17 +974,11 @@ impl Dashboard {
                     Span::raw(" "),
                     Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(
-                        format!("{:>4}p", job.pages_fetched),
-                        Style::default().fg(Color::Green),
-                    ),
+                    Span::styled(pages, Style::default().fg(Color::Green)),
                     Span::raw(" "),
-                    Span::styled(
-                        format!("{:>4.1}s", job.duration_secs),
-                        Style::default().fg(Color::Yellow),
-                    ),
+                    Span::styled(duration, Style::default().fg(Color::Yellow)),
                     Span::raw(" "),
-                    Span::raw(truncate(&job.target_label(), 80)),
+                    Span::raw(target),
                 ]);
                 let style = if selected {
                     Style::default()
@@ -923,11 +1073,97 @@ impl Dashboard {
         );
     }
 
+    fn render_commands(&self, frame: &mut Frame<'_>, area: Rect) {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "Dashboard commands",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            command_line("h / ?", "show this commands and settings view"),
+            command_line("n", "open a new crawl form"),
+            command_line(
+                "e",
+                "edit current run settings after finish, or selected recent job",
+            ),
+            command_line("r", "rerun the same crawl after finish"),
+            command_line(
+                "p / Space",
+                "pause or resume leasing new URLs while running",
+            ),
+            command_line("s", "stop gracefully after in-flight requests finish"),
+            command_line("Up / Down, j / k", "select recent jobs"),
+            command_line("c", "clear saved jobs from the idle control center"),
+            command_line("q / Esc", "leave this view or exit the dashboard"),
+            command_line("Ctrl-C", "stop and exit"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Form commands",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            command_line("Tab / Down", "next field"),
+            command_line("Shift-Tab / Up", "previous field"),
+            command_line("Enter", "start the job with the current form values"),
+            command_line("Backspace", "delete from the active field"),
+            command_line(
+                "y / n",
+                "toggle boolean fields like Robots delay and Save job",
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Current settings",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        ];
+
+        if let Some(spec) = self.current_settings_spec() {
+            lines.extend([
+                setting_line("Target", spec.target),
+                setting_line("Max pages", optional_display(spec.max_pages)),
+                setting_line("Depth", optional_display(spec.depth)),
+                setting_line("Concurrency", spec.concurrency.to_string()),
+                setting_line("Scope", spec.scope),
+                setting_line("Delay", spec.delay),
+                setting_line(
+                    "Robots delay",
+                    if spec.respect_crawl_delay {
+                        "honor Crawl-delay"
+                    } else {
+                        "ignore Crawl-delay"
+                    },
+                ),
+                setting_line(
+                    "Output",
+                    spec.output.unwrap_or_else(|| "(none)".to_string()),
+                ),
+                setting_line("Save job", if spec.save { "y" } else { "n" }),
+            ]);
+        } else {
+            lines.push(Line::from("No current or selected job settings available."));
+        }
+
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .title("Commands and Settings")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+    }
+
     fn render_footer(&self, frame: &mut Frame<'_>, area: Rect) {
         let hint = self
             .last_key_hint
             .as_deref()
-            .unwrap_or("n new job | Up/Down select job | e edit selected | c clear jobs | q exit");
+            .unwrap_or("h commands | n new job | Up/Down select job | e edit selected | q exit");
         frame.render_widget(
             Paragraph::new(hint)
                 .block(Block::default().borders(Borders::ALL))
@@ -1045,7 +1281,27 @@ fn handle_keys(
             continue;
         }
 
+        if app.mode == ViewMode::Commands {
+            match key.code {
+                KeyCode::Char('h')
+                | KeyCode::Char('H')
+                | KeyCode::Char('?')
+                | KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => {
+                    app.mode = ViewMode::Dashboard;
+                    app.last_key_hint = Some("commands closed".into());
+                }
+                _ => {}
+            }
+            continue;
+        }
+
         match key.code {
+            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') => {
+                app.mode = ViewMode::Commands;
+                app.last_key_hint = Some("commands: h/?/Esc closes".into());
+            }
             KeyCode::Char('n') | KeyCode::Char('N')
                 if app.summary.is_some() || matches!(app.status, Status::Idle) =>
             {
@@ -1157,11 +1413,14 @@ fn handle_form_key(code: KeyCode, app: &mut Dashboard, actions: &UnboundedSender
             app.new_job.error = None;
         }
         KeyCode::Char(c) => {
-            // Save field: single-key ergonomic toggles.
-            if app.new_job.active == SAVE_JOB_FIELD_INDEX {
+            // Boolean fields: single-key ergonomic toggles.
+            if matches!(
+                app.new_job.active,
+                ROBOTS_DELAY_FIELD_INDEX | SAVE_JOB_FIELD_INDEX
+            ) {
                 match c.to_ascii_lowercase() {
-                    'y' => app.new_job.fields[SAVE_JOB_FIELD_INDEX].value = "y".to_string(),
-                    'n' => app.new_job.fields[SAVE_JOB_FIELD_INDEX].value = "n".to_string(),
+                    'y' => app.new_job.fields[app.new_job.active].value = "y".to_string(),
+                    'n' => app.new_job.fields[app.new_job.active].value = "n".to_string(),
                     _ => app.new_job.active_value_mut().push(c),
                 }
             } else {
@@ -1200,13 +1459,18 @@ fn success_color(success: f64) -> Color {
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    let mut chars = value.chars();
-    let truncated = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
+    if max_chars == 0 {
+        return String::new();
     }
+    let value_len = value.chars().count();
+    if value_len <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let prefix = value.chars().take(max_chars - 3).collect::<String>();
+    format!("{prefix}...")
 }
 
 pub(crate) fn human_bytes(bytes: u64) -> String {

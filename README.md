@@ -21,8 +21,9 @@ archiver, a site auditor).
 * **Smart scoping**: stay on the same host, the same registrable domain
   (Public Suffix List aware), or roam the open web, plus include and exclude
   regex filters.
-* **Robust fetching**: timeouts, bounded retries with backoff, redirect
-  following, and a hard cap on response body size.
+* **Robust fetching**: timeouts, bounded retries with backoff for transient
+  network failures and temporary HTTP statuses, redirect following, and a hard
+  cap on response body size.
 * **Deduplication** via URL normalization, so the same page is never queued
   twice.
 * **Sitemap seeding** from `sitemap.xml` (and sitemap indexes).
@@ -192,7 +193,9 @@ rustcrawl https://docs.example.com \
 | `-n, --max-pages <N>` | Stop after N pages | unlimited |
 | `-c, --concurrency <N>` | Concurrent in flight requests across all hosts, 1 to 1024 | 16 |
 | `--delay <DUR>` | Min delay per host (e.g. `250ms`, `1s`) | 250ms |
+| `--ignore-crawl-delay` | Ignore `Crawl-delay` while still obeying robots allow and deny rules | off |
 | `--timeout <DUR>` | Per-request timeout | 30s |
+| `--retries <N>` | Retries for transient network failures and temporary HTTP statuses | 2 |
 | `--scope <host\|domain\|any>` | How far to roam | domain |
 | `--include <REGEX>` | Only crawl matching URLs (repeatable) | none |
 | `--exclude <REGEX>` | Skip matching URLs (repeatable) | none |

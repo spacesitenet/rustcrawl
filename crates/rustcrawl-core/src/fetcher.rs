@@ -3,12 +3,17 @@
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
+use reqwest::header::{HeaderMap, RETRY_AFTER};
 use reqwest::{Client, StatusCode};
 use url::Url;
 
 use crate::config::CrawlConfig;
 use crate::error::{CrawlError, Result};
 use crate::page::PageErrorKind;
+
+const BASE_BACKOFF: Duration = Duration::from_millis(200);
+const MAX_BACKOFF: Duration = Duration::from_secs(10);
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 /// A successful HTTP response with its body fully (and boundedly) buffered.
 #[derive(Debug)]
@@ -31,6 +36,8 @@ pub struct FetchError {
     pub kind: PageErrorKind,
     /// Human-readable detail.
     pub message: String,
+    retryable: bool,
+    retry_after: Option<Duration>,
 }
 
 impl FetchError {
@@ -38,7 +45,19 @@ impl FetchError {
         Self {
             kind,
             message: message.into(),
+            retryable: false,
+            retry_after: None,
         }
+    }
+
+    fn retryable(mut self) -> Self {
+        self.retryable = true;
+        self
+    }
+
+    fn with_retry_after(mut self, delay: Option<Duration>) -> Self {
+        self.retry_after = delay;
+        self
     }
 }
 
@@ -87,10 +106,20 @@ impl Fetcher {
         loop {
             match self.try_fetch(url).await {
                 Ok(resp) => return Ok(resp),
-                Err(err) if err_is_retryable(&err.kind) && attempt < self.max_retries => {
+                Err(err) if err.is_retryable() && attempt < self.max_retries => {
                     attempt += 1;
-                    let backoff = Duration::from_millis(200 * (1 << (attempt - 1)));
-                    tokio::time::sleep(backoff).await;
+                    let delay = err
+                        .retry_after
+                        .unwrap_or_else(|| backoff_for_attempt(attempt));
+                    tracing::debug!(
+                        url = %url,
+                        attempt,
+                        max_retries = self.max_retries,
+                        delay_ms = delay.as_millis(),
+                        error = %err,
+                        "retrying fetch"
+                    );
+                    tokio::time::sleep(delay).await;
                 }
                 Err(err) => return Err(err),
             }
@@ -123,10 +152,16 @@ impl Fetcher {
         }
 
         if status.is_client_error() || status.is_server_error() {
-            return Err(FetchError::new(
+            let retry_after = parse_retry_after(response.headers());
+            let mut err = FetchError::new(
                 PageErrorKind::HttpStatus,
                 format!("server returned {status}"),
-            ));
+            )
+            .with_retry_after(retry_after);
+            if is_retryable_status(status) {
+                err = err.retryable();
+            }
+            return Err(err);
         }
 
         let body = self.read_capped(response).await?;
@@ -157,8 +192,40 @@ impl Fetcher {
     }
 }
 
-fn err_is_retryable(kind: &PageErrorKind) -> bool {
-    matches!(kind, PageErrorKind::Transport)
+impl FetchError {
+    fn is_retryable(&self) -> bool {
+        matches!(self.kind, PageErrorKind::Transport) || self.retryable
+    }
+}
+
+fn is_retryable_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn backoff_for_attempt(attempt: u32) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(6);
+    let millis = (BASE_BACKOFF.as_millis() as u64)
+        .saturating_mul(1_u64 << exponent)
+        .min(MAX_BACKOFF.as_millis() as u64);
+    Duration::from_millis(millis)
+}
+
+fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds).min(MAX_RETRY_AFTER))
 }
 
 fn classify_reqwest_error(err: reqwest::Error) -> FetchError {
@@ -168,4 +235,34 @@ fn classify_reqwest_error(err: reqwest::Error) -> FetchError {
         PageErrorKind::Other
     };
     FetchError::new(kind, err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::HeaderValue;
+
+    #[test]
+    fn retries_transient_http_statuses() {
+        assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
+        assert!(!is_retryable_status(StatusCode::FORBIDDEN));
+        assert!(!is_retryable_status(StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn backoff_is_exponential_and_capped() {
+        assert_eq!(backoff_for_attempt(1), Duration::from_millis(200));
+        assert_eq!(backoff_for_attempt(2), Duration::from_millis(400));
+        assert_eq!(backoff_for_attempt(3), Duration::from_millis(800));
+        assert_eq!(backoff_for_attempt(100), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn retry_after_seconds_are_capped() {
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("120"));
+        assert_eq!(parse_retry_after(&headers), Some(MAX_RETRY_AFTER));
+    }
 }

@@ -66,7 +66,8 @@ pub struct CrawlConfig {
     pub include: Vec<regex::Regex>,
     /// URLs matching any of these patterns are never crawled.
     pub exclude: Vec<regex::Regex>,
-    /// Number of retry attempts for transient transport failures.
+    /// Number of retry attempts for transient transport failures and temporary
+    /// HTTP statuses (`408`, `429`, `500`, `502`, `503`, `504`).
     pub max_retries: u32,
     /// Hard cap on response body size; larger bodies are skipped.
     pub max_body_bytes: usize,
@@ -206,6 +207,9 @@ impl CrawlConfigBuilder {
     }
 
     /// Set the retry count for transient failures.
+    ///
+    /// Retries use capped exponential backoff and honor numeric `Retry-After`
+    /// headers up to the fetcher's internal cap.
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
