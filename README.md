@@ -43,19 +43,16 @@ cd rustcrawl
 
 ### Run from source (local development)
 
-If you just cloned the repo, **`rustcrawl` is not on your PATH yet**. Use one of
-these:
-
-**Option A, `cargo run` (recommended while hacking):**
+If you just cloned the repo, `rustcrawl` is not on your PATH yet.
+During development, run it through Cargo:
 
 ```bash
 cargo run -p rustcrawl-cli -- https://example.com -n 50 -o pages.jsonl
 ```
 
-Everything after `--` is passed to the crawler. Rebuilds automatically when
-source changes.
+Everything after `--` is passed to the crawler.
 
-**Option B, run the built binary directly:**
+If you prefer running the built binary directly:
 
 ```bash
 cargo build -p rustcrawl-cli
@@ -69,7 +66,7 @@ cargo build --release -p rustcrawl-cli
 .\target\release\rustcrawl.exe https://example.com -n 50
 ```
 
-**Option C, install onto your PATH (recommended for daily use):**
+To install `rustcrawl` on your PATH for daily use:
 
 ```bash
 cargo install --path crates/rustcrawl-cli
@@ -94,14 +91,14 @@ $env:Path += ";$env:USERPROFILE\.cargo\bin"
 cargo --version
 ```
 
-Or close and reopen your terminal / VS Code / Cursor window, then try again.
+Or close and reopen your terminal (or Cursor) and try again.
 
 **Windows build errors about `dlltool.exe` or `link.exe`**
 
-The MSVC linker is not always present. Options:
-
-1. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload, **or**
-2. Use the GNU toolchain + MinGW (what many local Windows setups use):
+If the MSVC linker is missing, either install
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+with the "Desktop development with C++" workload, or use the GNU toolchain +
+MinGW:
 
 ```powershell
 rustup default stable-x86_64-pc-windows-gnu
