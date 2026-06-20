@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rustcrawl-core",
+    "crates/rustcrawl-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+authors = ["rustcrawl contributors"]
+repository = "https://github.com/rustcrawl/rustcrawl"
+homepage = "https://github.com/rustcrawl/rustcrawl"
+description = "A fast, polite, embeddable web crawler written in Rust."
+keywords = ["crawler", "spider", "scraper", "web", "http"]
+categories = ["web-programming", "command-line-utilities"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+rustcrawl-core = { path = "crates/rustcrawl-core", version = "0.1.0" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "gzip", "brotli", "deflate", "native-tls"] }
+url = { version = "2", features = ["serde"] }
+scraper = "0.20"
+texting_robots = "0.2"
+quick-xml = "0.36"
+regex = "1"
+psl = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+humantime = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+bytes = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,50 @@
+[package]
+name = "rustcrawl-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core crawling engine for rustcrawl: frontier, scheduling, fetching, and parsing."
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+scraper.workspace = true
+texting_robots.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+psl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "time",
+    "sync",
+] }
+async-trait.workspace = true
+criterion = "0.7.0"
+
+[[bench]]
+name = "core_hot_paths"
+harness = false
