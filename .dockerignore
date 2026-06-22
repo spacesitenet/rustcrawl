@@ -1,0 +1,15 @@
+# Keep the build context small and reproducible.
+target/
+.git/
+.github/
+deploy/
+.rustcrawl/
+
+# Crawl artifacts and local output.
+*.jsonl
+
+# Editor / OS noise.
+.idea/
+.vscode/
+*.swp
+.DS_Store

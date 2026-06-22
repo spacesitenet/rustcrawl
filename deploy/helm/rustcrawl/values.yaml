@@ -1,0 +1,91 @@
+# Default values for the rustcrawl chart.
+
+image:
+  # Replace with your registry/repository.
+  repository: ghcr.io/OWNER/rustcrawl
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Optional registry pull secrets, e.g. [{ name: ghcr-creds }].
+imagePullSecrets: []
+
+# "job"      -> run a single one-off crawl.
+# "cronjob"  -> run on a recurring schedule.
+mode: job
+
+# Cron schedule used when mode == "cronjob".
+schedule: "0 */6 * * *"
+
+crawl:
+  # Seed URLs to crawl. Rendered first on the command line.
+  seeds:
+    - https://example.com
+  # Crawl flags. See `rustcrawl --help`.
+  args:
+    - "-n"
+    - "1000"
+    - "-c"
+    - "16"
+    - "--scope"
+    - "domain"
+  # Anything extra appended after args (handy for per-environment overrides).
+  extraArgs: []
+
+job:
+  backoffLimit: 3
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  restartPolicy: Never
+
+cron:
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+# Pod-level security context. Locked down by default.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Persist JSON Lines output to a PersistentVolume instead of stdout.
+# When enabled, add an output flag to crawl.args, e.g. ["-o", "/data/pages.jsonl"].
+persistence:
+  enabled: false
+  mountPath: /data
+  # Use an existing claim instead of creating one.
+  existingClaim: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  storageClassName: ""
+
+# Extra environment variables (e.g. RUST_LOG for verbose dependency logs).
+env: []
+#  - name: RUST_LOG
+#    value: "info"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,17 @@
+{{- if eq .Values.mode "cronjob" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "rustcrawl.fullname" . }}
+  labels:
+    {{- include "rustcrawl.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.cron.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.cron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cron.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ .Values.cron.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      {{- include "rustcrawl.jobSpec" . | nindent 6 }}
+{{- end }}

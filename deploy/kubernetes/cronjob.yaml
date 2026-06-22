@@ -1,0 +1,73 @@
+# Scheduled recrawl as a Kubernetes CronJob.
+#
+# Useful for keeping a portal index fresh: recrawl a set of seeds on a cadence.
+# Output is JSON Lines on stdout; point your log pipeline (or a sidecar) at it,
+# or mount a volume and pass `-o /data/pages.jsonl`.
+#
+#   kubectl apply -f deploy/kubernetes/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rustcrawl-recrawl
+  labels:
+    app.kubernetes.io/name: rustcrawl
+    app.kubernetes.io/component: recrawl
+spec:
+  # Every 6 hours. Standard cron syntax.
+  schedule: "0 */6 * * *"
+  # Do not pile up overlapping crawls if one runs long.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: rustcrawl
+            app.kubernetes.io/component: recrawl
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: rustcrawl
+              image: ghcr.io/OWNER/rustcrawl:latest
+              imagePullPolicy: IfNotPresent
+              args:
+                - "https://example.com"
+                - "-n"
+                - "5000"
+                - "-c"
+                - "24"
+                - "--scope"
+                - "domain"
+                - "--no-save"
+                - "-q"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
