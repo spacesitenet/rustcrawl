@@ -1,0 +1,77 @@
+# One-off crawl as a Kubernetes Job.
+#
+# Each Job pod runs an independent crawl. Page output is written as JSON Lines
+# to stdout and captured by your cluster logging stack. Replace the image and
+# the crawl arguments below for your own target.
+#
+#   kubectl apply -f deploy/kubernetes/job.yaml
+#   kubectl logs -f job/rustcrawl-crawl
+#
+# Note: this runs many independent crawls well. It does NOT share a frontier
+# across pods, so a single crawl is not split across replicas.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustcrawl-crawl
+  labels:
+    app.kubernetes.io/name: rustcrawl
+    app.kubernetes.io/component: crawl
+spec:
+  # Give up after this many failed retries.
+  backoffLimit: 3
+  # Hard wall-clock ceiling for the crawl (seconds).
+  activeDeadlineSeconds: 3600
+  # Auto-clean finished Jobs after a day (requires the TTL controller).
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rustcrawl
+        app.kubernetes.io/component: crawl
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rustcrawl
+          # Replace OWNER with your GitHub org/user (or your own registry).
+          image: ghcr.io/OWNER/rustcrawl:latest
+          imagePullPolicy: IfNotPresent
+          # Seeds first, then flags. `-q` forces headless mode and `--no-save`
+          # keeps the root filesystem read-only by skipping local job history.
+          args:
+            - "https://example.com"
+            - "-n"
+            - "1000"
+            - "-c"
+            - "16"
+            - "--scope"
+            - "domain"
+            - "--no-save"
+            - "-q"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            # native-tls and reqwest may use /tmp; keep it writable even with a
+            # read-only root filesystem.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

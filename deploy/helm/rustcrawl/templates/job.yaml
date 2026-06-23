@@ -1,0 +1,10 @@
+{{- if eq .Values.mode "job" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rustcrawl.fullname" . }}
+  labels:
+    {{- include "rustcrawl.labels" . | nindent 4 }}
+spec:
+  {{- include "rustcrawl.jobSpec" . | nindent 2 }}
+{{- end }}

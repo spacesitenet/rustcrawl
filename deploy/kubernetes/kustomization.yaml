@@ -1,0 +1,25 @@
+# Bundle the raw manifests and set the image in one place.
+#
+#   # Render:
+#   kubectl kustomize deploy/kubernetes
+#
+#   # Apply directly:
+#   kubectl apply -k deploy/kubernetes
+#
+# Override the image without editing each manifest:
+#   cd deploy/kubernetes
+#   kustomize edit set image ghcr.io/OWNER/rustcrawl=ghcr.io/my-org/rustcrawl:v1.0.0
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - job.yaml
+  - cronjob.yaml
+
+images:
+  - name: ghcr.io/OWNER/rustcrawl
+    newName: ghcr.io/OWNER/rustcrawl
+    newTag: latest
+
+commonLabels:
+  app.kubernetes.io/part-of: rustcrawl
